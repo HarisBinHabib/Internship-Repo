@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Refresh Opportunity Scoring — A Ranking Approach to Content Review Prioritization</title>
+<style>
+  body { font-family: Georgia, 'Times New Roman', serif; max-width: 780px; margin: 0 auto; padding: 40px 20px; line-height: 1.65; color: #222; }
+  h1 { font-size: 2rem; margin-bottom: 0.2em; }
+  h2 { margin-top: 2.2em; border-bottom: 1px solid #ddd; padding-bottom: 0.3em; }
+  .subtitle { color: #666; font-size: 1.05rem; margin-bottom: 2em; }
+  .abstract { background: #f7f7f5; border-left: 3px solid #888; padding: 1.2em 1.5em; font-size: 0.97rem; }
+  table { border-collapse: collapse; width: 100%; margin: 1.2em 0; font-size: 0.95rem; }
+  th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
+  th { background: #f2f2f2; }
+  code { background: #f2f2f2; padding: 2px 5px; border-radius: 3px; font-size: 0.9em; }
+  .caveat { font-style: italic; color: #555; }
+  footer { margin-top: 3em; padding-top: 1em; border-top: 1px solid #ddd; font-size: 0.9rem; color: #666; }
+  a { color: #1a4d8f; }
+</style>
+</head>
+<body>
+
+<h1>Refresh Opportunity Scoring: A Ranking Approach to Content Review Prioritization</h1>
+<p class="subtitle">Haris Bin Habib — FlyRank ML Internship, Applied Search Intelligence Track</p>
+
+<div class="abstract">
+<strong>Abstract.</strong> Content editors face a large inventory of pages and limited time to
+review them. This project asks which pages an editor should review first, given evidence of
+decline, using only signals observable before the decision point. I built a transparent
+rule-based baseline and compared it against two trained classifiers on FlyRank's pseudonymized
+search performance warehouse, using a client-grouped, time-aware validation design to avoid
+leakage. Against a base rate of <strong>0.533</strong>, the baseline reached precision@50 of
+<strong>0.640</strong>; logistic regression reached <strong>0.680</strong>, a modest
+improvement, while a random forest reached only <strong>0.560</strong> despite having the
+highest overall ROC-AUC (0.615) of the three methods. The result is a ranked, reason-coded
+action queue — decision support for editorial review, not a causal claim about what fixes a
+page — and a reminder that a model's overall ranking quality and its precision at the very top
+of a list are not the same thing.
+</div>
+
+<h2>Introduction</h2>
+<p>
+FlyRank's content inventory spans hundreds of thousands of pages per client, far more than any
+editorial team can review individually. The decision this work supports is simple to state and
+hard to automate well: <em>which pages should an editor look at first?</em> A wrong answer
+costs either wasted review time (a false positive) or a missed decline that compounds before
+anyone notices (a false negative). Because editor capacity is fixed, the right metric is not
+overall accuracy but precision at the top of a ranked list — precision@K — matching how the
+output is actually consumed.
+</p>
+
+<h2>Data</h2>
+<p>
+This project uses the FlyRank internship warehouse release (build
+<code>flyrank_pseudonymized_warehouse_release_v20260703</code>), hosted on Hugging Face at
+<a href="https://huggingface.co/datasets/FlyRank/internship-warehouse">FlyRank/internship-warehouse</a>,
+specifically the <code>dim_clients</code>, <code>dim_content</code>, and
+<code>fact_content_daily_performance</code> tables. The daily fact table spans
+2025-01-27 through 2026-06-30. I anchored my analysis at 2026-03-31 — a mid-panel date, chosen
+specifically to avoid the release's sealed final month, which is the natural outcome window for
+any past-to-future label. All identifiers (client and content IDs) are pseudonymized; no raw
+client names, domains, URLs, or query text are present in this release or in this paper.
+</p>
+<p class="caveat">
+Excluded by design: FlyRank's own product decision fields (<code>health_score</code>,
+<code>priority_score</code>, <code>action_type</code>) are not present in this release — my
+model only ever sees observable signals, never the product's own prior decisions.
+</p>
+<p>
+The feature-and-label pipeline produced 120,258 (client, content) pairs with at least 100
+impressions in the prior 90-day window. Of the 11,583 held-out test rows, 6,858 (59%) still
+showed activity within the last 30 days of that window; the remaining rows — pages already
+silent for 30+ days — were excluded from evaluation for reasons explained in Methodology.
+</p>
+
+<h2>Methodology</h2>
+<p>
+<strong>Unit of analysis:</strong> one (client, content) pair, aggregated over a rolling
+90-day feature window ending at the decision point (2026-03-31).<br>
+<strong>Label:</strong> <code>declined_next30</code> — impressions in the 30 days after the
+decision point falling below 70% of the prior-90-day impressions. This is a future-observed
+outcome, not a same-window proxy.<br>
+<strong>Features:</strong> prior-90-day impressions, clicks, average position, CTR, and days
+since last seen — all knowable strictly before the decision point.<br>
+<strong>Validation:</strong> a client-grouped train/test split (75/25), so no client's pages
+appear in both sets — preventing the model from memorizing client-specific patterns instead of
+learning generalizable signal.<br>
+<strong>Baseline:</strong> a transparent rule — flag a page as an opportunity if its prior-90-day
+impressions were at or above 500, scored by impression volume. No fitted weights.
+</p>
+<p class="caveat">
+An earlier version of this baseline flagged pages by a "days since last seen" staleness rule
+and reached a suspicious precision@50 of 1.000. Inspection showed every top-ranked page under
+that rule had already gone completely silent (zero impressions) for 30+ consecutive days
+before the decision point — predicting that an already-dead page stays dead is not a
+meaningful decline prediction, just a restatement of the same fact. I corrected this by
+restricting evaluation to pages that still showed some activity in the final 30 days of the
+feature window, where the outcome is genuinely uncertain, and redefined the baseline around
+impression volume instead. This is reported here in the interest of honest methodology.
+</p>
+
+<h2>Results</h2>
+<table>
+<tr><th>Method</th><th>Precision@50</th><th>ROC-AUC</th></tr>
+<tr><td>Base rate</td><td>0.533</td><td>—</td></tr>
+<tr><td>Baseline rule</td><td>0.640</td><td>—</td></tr>
+<tr><td>Logistic regression</td><td>0.680</td><td>0.581</td></tr>
+<tr><td>Random forest</td><td>0.560</td><td>0.615</td></tr>
+</table>
+<p>
+The transparent baseline already outperforms random selection by a wide margin (0.640 vs.
+0.533), meaning impression volume alone is a real, useful signal for this task. Logistic
+regression edges out the baseline (0.680), a real but modest 6-percentage-point gain — not
+the kind of dramatic improvement that would justify replacing a simple, explainable rule on
+its own. More strikingly, the random forest — despite having the best overall ROC-AUC of the
+three methods (0.615) — actually scores <em>below</em> the baseline on precision@50 (0.560).
+This is a useful reminder that a model can rank the full population better on average while
+still being worse at the specific task an editor cares about: getting the very top of a
+limited-capacity list right. With only five engineered features and a single time-anchored
+evaluation, this result should be read as an early, honest signal rather than a settled
+comparison — a natural next step would be testing whether additional features or a different
+decision threshold change which method wins at the top of the list.
+</p>
+
+<h2>Limitations &amp; Honest Framing</h2>
+<ul>
+<li>This is a single time-anchored evaluation (2026-03-31); it has not yet been validated
+across multiple decision points or seasons, so these precision numbers may not hold at a
+different point in the year.</li>
+<li>Client tracking history is uneven — some clients contribute thinner feature windows than
+others, which the model cannot distinguish from genuinely low activity.</li>
+<li>The label is a threshold-based proxy for decline (impressions falling below 70% of the
+prior window), not a ground-truth business outcome.</li>
+<li>Only five features were used (impressions, clicks, position, CTR, and days since last
+seen). The random forest's underperformance at precision@50 relative to the baseline may
+partly reflect this small feature set rather than a fundamental limit of the method.</li>
+<li>This work never claims that a refresh <em>causes</em> recovery — that would require a
+controlled experiment. The output is decision support: a ranked, reason-coded starting point
+for human review, not a guarantee.</li>
+<li>No claims are made about Google's ranking algorithm or AI search visibility.</li>
+</ul>
+
+<h2>Ranked Recommendations</h2>
+<p>
+The ranked queue (see <code>work/outputs/capstone_ranked_queue.csv</code> in the repo, 6,858
+rows) is ordered by the logistic regression model's estimated decline probability — the
+method that won on precision@50, the metric that matches how a limited-capacity review queue
+is actually used. Each row carries a reason code and a suggested action
+(<code>refresh</code>). Several top-ranked pages carry substantial impression volume
+(70,000–180,000 in the prior 90 days), meaning even a modest false-positive rate among them
+still represents meaningful review time. An editor working from this list should sanity-check
+each recommendation against context the model cannot see — e.g. whether a nearby sibling page
+absorbed the traffic (consolidation) rather than a genuine decline.
+</p>
+
+<h2>Reproducibility</h2>
+<p>
+All code, notebooks, and this paper's source live in the public repository:
+<a href="https://github.com/HarisBinHabib/Internship-Repo">github.com/HarisBinHabib/Internship-Repo</a>.
+The full pipeline — data contract (<code>work/notebooks/w03_data_contract.ipynb</code>),
+baseline (<code>work/notebooks/w04_baseline_score.ipynb</code>), and capstone model
+(<code>work/notebooks/capstone.ipynb</code>) — can be re-run end to end from the repo alone.
+</p>
+
+<footer>
+Built on the FlyRank ML Internship dataset — <a href="https://flyrank.ai">flyrank.ai</a>
+</footer>
+
+</body>
+</html>
